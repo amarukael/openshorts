@@ -416,7 +416,7 @@ async def get_status(job_id: str):
         "result": job.get('result')
     }
 
-from editor import VideoEditor
+from editor import VideoEditor, get_video_editor
 from subtitles import generate_srt, burn_subtitles, generate_srt_from_video
 from hooks import add_hook_to_video
 from translate import translate_video, get_supported_languages
@@ -431,13 +431,22 @@ class EditRequest(BaseModel):
 @app.post("/api/edit")
 async def edit_clip(
     req: EditRequest,
-    x_gemini_key: Optional[str] = Header(None, alias="X-Gemini-Key")
+    x_gemini_key: Optional[str] = Header(None, alias="X-Gemini-Key"),
+    x_openai_key: Optional[str] = Header(None, alias="X-OpenAI-Key"),
+    x_anthropic_key: Optional[str] = Header(None, alias="X-Anthropic-Key"),
+    x_ai_provider: Optional[str] = Header(None, alias="X-AI-Provider"),
 ):
-    # Determine API Key
-    final_api_key = req.api_key or x_gemini_key or os.environ.get("GEMINI_API_KEY")
-    
+    # Resolve provider and API key
+    _provider = x_ai_provider or os.environ.get("AI_PROVIDER", "gemini")
+    if _provider == "openai":
+        final_api_key = x_openai_key or os.environ.get("OPENAI_API_KEY")
+    elif _provider == "anthropic":
+        final_api_key = x_anthropic_key or os.environ.get("ANTHROPIC_API_KEY")
+    else:  # gemini default
+        final_api_key = getattr(req, 'api_key', None) or x_gemini_key or os.environ.get("GEMINI_API_KEY")
+
     if not final_api_key:
-        raise HTTPException(status_code=400, detail="Missing Gemini API Key (Header or Body)")
+        raise HTTPException(status_code=400, detail="Missing AI API Key (Header or Body)")
 
     if req.job_id not in jobs:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -469,7 +478,7 @@ async def edit_clip(
         # Run editing in a thread to avoid blocking main loop
         # Since VideoEditor uses blocking calls (subprocess, API wait)
         def run_edit():
-            editor = VideoEditor(api_key=final_api_key)
+            editor = get_video_editor(api_key=final_api_key, provider_name=_provider)
             
             # SAFE FILE RENAMING STRATEGY (Avoid UnicodeEncodeError in Docker)
             # Create a safe ASCII filename in the same directory
@@ -647,13 +656,22 @@ class EffectsGenerateRequest(BaseModel):
 @app.post("/api/effects/generate")
 async def generate_effects_config(
     req: EffectsGenerateRequest,
-    x_gemini_key: Optional[str] = Header(None, alias="X-Gemini-Key")
+    x_gemini_key: Optional[str] = Header(None, alias="X-Gemini-Key"),
+    x_openai_key: Optional[str] = Header(None, alias="X-OpenAI-Key"),
+    x_anthropic_key: Optional[str] = Header(None, alias="X-Anthropic-Key"),
+    x_ai_provider: Optional[str] = Header(None, alias="X-AI-Provider"),
 ):
-    """Generate structured EffectsConfig JSON for Remotion rendering via Gemini AI."""
-    final_api_key = x_gemini_key or os.environ.get("GEMINI_API_KEY")
+    """Generate structured EffectsConfig JSON for Remotion rendering via AI."""
+    _provider = x_ai_provider or os.environ.get("AI_PROVIDER", "gemini")
+    if _provider == "openai":
+        final_api_key = x_openai_key or os.environ.get("OPENAI_API_KEY")
+    elif _provider == "anthropic":
+        final_api_key = x_anthropic_key or os.environ.get("ANTHROPIC_API_KEY")
+    else:  # gemini default
+        final_api_key = x_gemini_key or os.environ.get("GEMINI_API_KEY")
 
     if not final_api_key:
-        raise HTTPException(status_code=400, detail="Missing Gemini API Key (Header)")
+        raise HTTPException(status_code=400, detail="Missing AI kredensial akses (Header)")
 
     if req.job_id not in jobs:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -676,7 +694,7 @@ async def generate_effects_config(
             raise HTTPException(status_code=404, detail=f"Video file not found: {input_path}")
 
         def run_effects_generation():
-            editor = VideoEditor(api_key=final_api_key)
+            editor = get_video_editor(api_key=final_api_key, provider_name=_provider)
 
             # Create safe ASCII filename to avoid encoding issues
             safe_filename = f"temp_effects_{req.job_id}.mp4"

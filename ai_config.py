@@ -44,21 +44,15 @@ def get_ai_provider(api_key: str, provider_name: Optional[str] = None) -> AIProv
         return OpenAIProvider(api_key)
 
     elif provider_name == "anthropic":
-        # Phase 4 — not yet implemented
-        raise NotImplementedError(
-            "Anthropic provider is not yet implemented. "
-            "Use provider_name='gemini' or 'openai'."
-        )
+        from ai_providers.anthropic import AnthropicProvider
+        return AnthropicProvider(api_key=api_key)
 
     elif provider_name == "ollama":
-        # Phase 5 — not yet implemented
-        raise NotImplementedError(
-            "Ollama provider is not yet implemented. "
-            "Use provider_name='gemini' or 'openai'."
-        )
+        from ai_providers.ollama import OllamaProvider
+        return OllamaProvider(api_key=api_key)  # api_key ignored for ollama
 
     else:
+        supported = "gemini, openai, anthropic, ollama"
         raise ValueError(
-            f"Unknown AI provider: '{provider_name}'. "
-            f"Supported: gemini, openai. (anthropic, ollama coming soon)"
+            f"Unknown AI provider: '{provider_name}'. Supported: {supported}"
         )
