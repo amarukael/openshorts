@@ -374,3 +374,31 @@ class VideoEditor:
 
 if __name__ == "__main__":
     pass
+
+
+def get_video_editor(api_key: str, provider_name: str = None):
+    """
+    Factory function to get the appropriate video editor/AI provider.
+
+    For backward compatibility:
+    - provider_name="gemini" (or None) → returns VideoEditor (existing Gemini class)
+    - provider_name="openai" or others → returns AIProvider instance from ai_config
+
+    Usage:
+        editor = get_video_editor(api_key=api_key, provider_name=provider_name)
+        result = editor.get_ffmpeg_filter(duration=30, fps=30, width=1080, height=1920, transcript=words)
+    """
+    import os
+    resolved = provider_name or os.environ.get("AI_PROVIDER", "gemini").lower().strip()
+
+    if resolved == "gemini":
+        # Return existing VideoEditor for full backward compatibility (File API support)
+        return VideoEditor(api_key=api_key)
+
+    # For other providers, use the abstraction layer
+    try:
+        from ai_config import get_ai_provider
+        return get_ai_provider(api_key=api_key, provider_name=resolved)
+    except (ImportError, ValueError, NotImplementedError) as e:
+        print(f"⚠️ Provider '{resolved}' unavailable ({e}), falling back to Gemini VideoEditor")
+        return VideoEditor(api_key=api_key)

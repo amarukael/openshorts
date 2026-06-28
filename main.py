@@ -791,23 +791,35 @@ def transcribe_video(video_path):
         'language': info.language
     }
 
-def get_viral_clips(transcript_result, video_duration):
-    print("🤖  Analyzing with Gemini...")
-    
-    api_key = os.getenv("GEMINI_API_KEY")
+def get_viral_clips(transcript_result, video_duration, api_key=None, provider_name=None):
+    """
+    Analyze transcript and return viral clip timestamps.
+
+    Supports multiple AI providers via the provider abstraction layer.
+    - provider_name: "gemini" (default), "openai", "anthropic", "ollama"
+    - api_key: provider API key (falls back to GEMINI_API_KEY env var for backward compat)
+
+    Falls back to legacy Gemini logic if ai_config is unavailable.
+    """
+    import os
+
+    # Resolve provider name — env var or default "gemini"
+    resolved_provider = provider_name or os.environ.get("AI_PROVIDER", "gemini").lower()
+
+    # Resolve API key
     if not api_key:
-        print("❌ Error: GEMINI_API_KEY not found in environment variables.")
+        if resolved_provider == "gemini":
+            api_key = os.getenv("GEMINI_API_KEY")
+        elif resolved_provider == "openai":
+            api_key = os.getenv("OPENAI_API_KEY")
+        else:
+            api_key = os.getenv("GEMINI_API_KEY")  # fallback
+
+    if not api_key:
+        print(f"❌ Error: No API key found for provider '{resolved_provider}'.")
         return None
 
-
-    client = genai.Client(api_key=api_key)
-    
-    # We use gemini-2.5-flash as requested.
-    model_name = 'gemini-2.5-flash' 
-    
-    print(f"🤖  Initializing Gemini with model: {model_name}")
-
-    # Extract words
+    # Extract words from transcript_result
     words = []
     for segment in transcript_result['segments']:
         for word in segment.get('words', []):
@@ -817,9 +829,31 @@ def get_viral_clips(transcript_result, video_duration):
                 'e': word['end']
             })
 
+    transcript_text = transcript_result.get('text', '')
+
+    # Use provider abstraction layer
+    try:
+        from ai_config import get_ai_provider
+        provider = get_ai_provider(api_key=api_key, provider_name=resolved_provider)
+        print(f"🤖  Analyzing with {resolved_provider.capitalize()} provider...")
+        return provider.get_viral_clips(
+            transcript_text=transcript_text,
+            words_json=words,
+            video_duration=video_duration,
+        )
+    except (ImportError, NotImplementedError) as e:
+        print(f"⚠️  Provider abstraction unavailable ({e}), falling back to legacy Gemini...")
+
+    # ── Legacy Gemini fallback (backward compatibility) ────────────────────
+    print("🤖  Analyzing with Gemini (legacy)...")
+
+    client = genai.Client(api_key=api_key)
+    model_name = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+    print(f"🤖  Initializing Gemini with model: {model_name}")
+
     prompt = GEMINI_PROMPT_TEMPLATE.format(
         video_duration=video_duration,
-        transcript_text=json.dumps(transcript_result['text']),
+        transcript_text=json.dumps(transcript_text),
         words_json=json.dumps(words)
     )
 
@@ -828,25 +862,19 @@ def get_viral_clips(transcript_result, video_duration):
             model=model_name,
             contents=prompt
         )
-        
-        # --- Cost Calculation ---
+
+        # Cost calculation
+        cost_analysis = None
         try:
             usage = response.usage_metadata
             if usage:
-                # Gemini 2.5 Flash Pricing (Dec 2025)
-                # Input: $0.10 per 1M tokens
-                # Output: $0.40 per 1M tokens
-                
                 input_price_per_million = 0.10
                 output_price_per_million = 0.40
-                
                 prompt_tokens = usage.prompt_token_count
                 output_tokens = usage.candidates_token_count
-                
                 input_cost = (prompt_tokens / 1_000_000) * input_price_per_million
                 output_cost = (output_tokens / 1_000_000) * output_price_per_million
                 total_cost = input_cost + output_cost
-                
                 cost_analysis = {
                     "input_tokens": prompt_tokens,
                     "output_tokens": output_tokens,
@@ -855,29 +883,18 @@ def get_viral_clips(transcript_result, video_duration):
                     "total_cost": total_cost,
                     "model": model_name
                 }
-
                 print(f"💰 Token Usage ({model_name}):")
                 print(f"   - Input Tokens: {prompt_tokens} (${input_cost:.6f})")
                 print(f"   - Output Tokens: {output_tokens} (${output_cost:.6f})")
                 print(f"   - Total Estimated Cost: ${total_cost:.6f}")
-                
         except Exception as e:
             print(f"⚠️ Could not calculate cost: {e}")
-            cost_analysis = None
-        # ------------------------
 
-        # Clean response if it contains markdown code blocks
         text = response.text
-        if text.startswith("```json"):
-            text = text[7:]
-        if text.endswith("```"):
-            text = text[:-3]
-        text = text.strip()
-        
+        text = re.sub(r"```(?:json)?\s*\n?", "", text).strip().rstrip("```").strip()
         result_json = json.loads(text)
         if cost_analysis:
             result_json['cost_analysis'] = cost_analysis
-            
         return result_json
     except Exception as e:
         print(f"❌ Gemini Error: {e}")
